@@ -1,35 +1,37 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
 import os
-import json
 import base64
 import urllib.request
 import urllib.parse
 
-# ========= CONFIG (Render Environment Variables) =========
+# ================== CONFIG ==================
 ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
-FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")          # your Twilio number, e.g. +18557033886
-OWNER_PHONE = os.getenv("OWNER_PHONE", "")                 # your real phone, e.g. +1XXXXXXXXXX
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")         # e.g. https://proxy-owner-ingest.onrender.com
+FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")      # Twilio number +1...
+OWNER_PHONE = os.getenv("OWNER_PHONE", "")             # Owner real phone +1...
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")     # https://proxy-owner-ingest.onrender.com
 
-# Messages (simple MVP text)
 SMS_TO_CALLER = os.getenv(
     "SMS_TO_CALLER",
-    "Sorry we missed your call. Reply with your name and address and we’ll call you back shortly."
-)
-SMS_TO_OWNER_TEMPLATE = os.getenv(
-    "SMS_TO_OWNER_TEMPLATE",
-    "Missed call: {caller}. Please call back."
+    "Sorry we missed your call. A technician will call you back shortly."
 )
 
-def twilio_sms(to_number: str, body: str) -> tuple[int, str]:
-    """
-    Sends SMS via Twilio REST API.
-    Returns (http_status, response_text).
-    """
-    if not (ACCOUNT_SID and AUTH_TOKEN and FROM_NUMBER):
-        return (0, "Missing TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER")
+SMS_TO_OWNER_TEMPLATE = os.getenv(
+    "SMS_TO_OWNER_TEMPLATE",
+    "Missed call from {caller}. Please call back."
+)
+
+# ================== HELPERS ==================
+def twiml(xml: str) -> bytes:
+    if not xml.strip().startswith("<?xml"):
+        xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + xml
+    return xml.encode("utf-8")
+
+def send_sms(to_number: str, body: str):
+    if not (ACCOUNT_SID and AUTH_TOKEN and FROM_NUMBER and to_number):
+        print("SMS SKIPPED: missing config")
+        return
 
     url = f"https://api.twilio.com/2010-04-01/Accounts/{ACCOUNT_SID}/Messages.json"
     data = urllib.parse.urlencode({
@@ -39,23 +41,19 @@ def twilio_sms(to_number: str, body: str) -> tuple[int, str]:
     }).encode("utf-8")
 
     req = urllib.request.Request(url, data=data, method="POST")
-    auth = base64.b64encode(f"{ACCOUNT_SID}:{AUTH_TOKEN}".encode("utf-8")).decode("utf-8")
+    auth = base64.b64encode(f"{ACCOUNT_SID}:{AUTH_TOKEN}".encode()).decode()
     req.add_header("Authorization", f"Basic {auth}")
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
 
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            return (resp.getcode(), resp.read().decode("utf-8", errors="ignore"))
+            print("SMS SENT:", to_number, resp.getcode())
     except Exception as e:
-        return (0, f"SMS send error: {repr(e)}")
+        print("SMS ERROR:", repr(e))
 
-def twiml(xml: str) -> bytes:
-    if not xml.strip().startswith("<?xml"):
-        xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + xml
-    return xml.encode("utf-8")
-
+# ================== SERVER ==================
 class Handler(BaseHTTPRequestHandler):
-    # --- healthchecks ---
+
     def do_HEAD(self):
         self.send_response(200)
         self.end_headers()
@@ -65,38 +63,59 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"OK")
 
-    # --- twilio webhooks ---
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
-        body_bytes = self.rfile.read(length)
-        raw = body_bytes.decode("utf-8", errors="ignore")
-        params = parse_qs(raw)
+        body = self.rfile.read(length).decode("utf-8", errors="ignore")
+        params = parse_qs(body)
 
-        # Common Twilio params
         caller = params.get("From", [""])[0]
-        call_sid = params.get("CallSid", [""])[0]
+        path = self.path
 
-        # Route by path
-        if self.path == "/" or self.path.startswith("/incoming"):
-            self.handle_incoming_call(caller=caller, call_sid=call_sid)
-            return
-
-        if self.path.startswith("/dial-status"):
-            self.handle_dial_status(params=params, caller=caller, call_sid=call_sid)
-            return
-
-        # Unknown path
-        self.send_response(404)
-        self.end_headers()
-        self.wfile.write(b"Not found")
-
-    def handle_incoming_call(self, caller: str, call_sid: str):
-        # Minimal guardrails
-        if not (OWNER_PHONE and PUBLIC_BASE_URL):
-            # Tell caller we have a config problem but keep Twilio happy
-            resp = twiml("""
+        # ---------- INCOMING CALL ----------
+        if path == "/" or path == "/incoming":
+            if not (OWNER_PHONE and PUBLIC_BASE_URL):
+                resp = twiml("""
 <Response>
   <Say>We are unable to take your call right now.</Say>
+  <Hangup/>
+</Response>
+""")
+            else:
+                action_url = PUBLIC_BASE_URL.rstrip("/") + "/dial-status"
+                resp = twiml(f"""
+<Response>
+  <Say>Please hold.</Say>
+  <Dial timeout="20" action="{action_url}" method="POST">
+    <Number>{OWNER_PHONE}</Number>
+  </Dial>
+</Response>
+""")
+                print("INCOMING CALL FROM:", caller)
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/xml")
+            self.end_headers()
+            self.wfile.write(resp)
+            return
+
+        # ---------- DIAL RESULT ----------
+        if path == "/dial-status":
+            dial_status = params.get("DialCallStatus", [""])[0]
+            print("DIAL STATUS:", dial_status)
+
+            if dial_status != "completed":
+                # Missed call → SMS
+                if caller:
+                    send_sms(caller, SMS_TO_CALLER)
+
+                if OWNER_PHONE:
+                    send_sms(
+                        OWNER_PHONE,
+                        SMS_TO_OWNER_TEMPLATE.format(caller=caller or "unknown")
+                    )
+
+            resp = twiml("""
+<Response>
   <Hangup/>
 </Response>
 """)
@@ -104,67 +123,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/xml")
             self.end_headers()
             self.wfile.write(resp)
-            print("CONFIG ERROR: missing OWNER_PHONE or PUBLIC_BASE_URL")
             return
 
-        # Dial owner; after Dial ends Twilio will POST to /dial-status with DialCallStatus
-        action_url = f"{PUBLIC_BASE_URL.rstrip('/')}/dial-status"
-
-        # Keep it very simple: try owner for 20 seconds
-        resp = twiml(f"""
-<Response>
-  <Dial timeout="20" action="{action_url}" method="POST">
-    <Number>{OWNER_PHONE}</Number>
-  </Dial>
-</Response>
-""")
-
-        self.send_response(200)
-        self.send_header("Content-Type", "application/xml")
+        # ---------- FALLBACK ----------
+        self.send_response(404)
         self.end_headers()
-        self.wfile.write(resp)
+        self.wfile.write(b"Not found")
 
-        print("INCOMING:", {"caller": caller, "call_sid": call_sid, "action_url": action_url})
-
-    def handle_dial_status(self, params, caller: str, call_sid: str):
-        # Dial result from Twilio
-        dial_status = params.get("DialCallStatus", [""])[0]   # completed | no-answer | busy | failed
-        dial_call_sid = params.get("DialCallSid", [""])[0]
-
-        print("DIAL RESULT:", {
-            "caller": caller,
-            "call_sid": call_sid,
-            "dial_call_sid": dial_call_sid,
-            "dial_status": dial_status
-        })
-
-        # If owner DID NOT answer -> "missed call recovery"
-        missed = dial_status != "completed"
-
-        if missed:
-            # 1) SMS to caller (may fail if toll-free SMS not verified; we still attempt)
-            if caller:
-                st1, resp1 = twilio_sms(caller, SMS_TO_CALLER)
-                print("SMS_TO_CALLER:", {"to": caller, "status": st1, "resp": resp1[:200]})
-
-            # 2) SMS to owner (always useful)
-            if OWNER_PHONE:
-                msg_owner = SMS_TO_OWNER_TEMPLATE.format(caller=caller or "unknown")
-                st2, resp2 = twilio_sms(OWNER_PHONE, msg_owner)
-                print("SMS_TO_OWNER:", {"to": OWNER_PHONE, "status": st2, "resp": resp2[:200]})
-
-        # End call politely (caller will be gone anyway if missed, but keep Twilio happy)
-        resp = twiml("""
-<Response>
-  <Say>Thank you. Goodbye.</Say>
-  <Hangup/>
-</Response>
-""")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/xml")
-        self.end_headers()
-        self.wfile.write(resp)
-
+# ================== RUN ==================
 def main():
     port = int(os.getenv("PORT", "10000"))
     server = HTTPServer(("0.0.0.0", port), Handler)
