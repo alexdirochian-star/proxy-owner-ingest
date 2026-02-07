@@ -1,15 +1,19 @@
-from flask import Flask, Response
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-app = Flask(__name__)
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers.get('Content-Length', 0))
+        self.rfile.read(length)
 
-@app.route("/", methods=["POST"])
-def voice():
-    return Response("""
+        self.send_response(200)
+        self.send_header("Content-type", "text/xml")
+        self.end_headers()
+        self.wfile.write(b"""
 <Response>
-  <Say voice="alice">Test call</Say>
-  <Dial>+13237440002</Dial>
+  <Say>Please hold</Say>
 </Response>
-""", mimetype="text/xml")
+""")
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+server = HTTPServer(("0.0.0.0", 10000), Handler)
+print("Server running...")
+server.serve_forever()
