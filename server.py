@@ -2,17 +2,24 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        length = int(self.headers.get('Content-Length'))
+        length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length)
+
         print("RECEIVED POST:")
-        print(body.decode())
+        try:
+            print(body.decode())
+        except:
+            print(body)
 
         self.send_response(200)
-        self.send_header("Content-type", "text/xml")
+        self.send_header("Content-Type", "application/xml")
         self.end_headers()
-        self.wfile.write(b"<Response></Response>")
+        self.wfile.write(
+            b'<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+        )
 
 server = HTTPServer(("0.0.0.0", 10000), Handler)
 print("Server running...")
 server.serve_forever()
+
 
