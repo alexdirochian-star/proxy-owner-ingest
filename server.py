@@ -2,20 +2,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 TWIML = b"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Pause length="60"/>
+    <Say voice="alice">Please hold.</Say>
+    <Pause length="30"/>
 </Response>
 """
 
 class Handler(BaseHTTPRequestHandler):
-
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-
-    def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
 
     def do_POST(self):
         length = int(self.headers.get('Content-Length', 0))
@@ -31,6 +23,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/xml")
         self.end_headers()
         self.wfile.write(TWIML)
+
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
 
 server = HTTPServer(("0.0.0.0", 10000), Handler)
 print("Server running...")
