@@ -14,15 +14,15 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length)
 
-        params = parse_qs(body.decode())
-        call_status = params.get("CallStatus", [""])[0]
-        print("CALL STATUS:", call_status)
+        # raw body (что именно прислал Twilio)
+        decoded_body = body.decode()
+        print("RAW BODY:", decoded_body)
 
-        print("RECEIVED POST FROM TWILIO:")
-        try:
-            print(body.decode())
-        except:
-            print(body)
+        # parse params
+        params = parse_qs(decoded_body)
+        call_status = params.get("CallStatus", [""])[0]
+
+        print("CALL STATUS:", call_status)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/xml")
@@ -41,4 +41,3 @@ class Handler(BaseHTTPRequestHandler):
 server = HTTPServer(("0.0.0.0", 10000), Handler)
 print("Server running...")
 server.serve_forever()
-
