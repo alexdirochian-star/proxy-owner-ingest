@@ -5,24 +5,24 @@ import base64
 import urllib.request
 import urllib.parse
 
-# ================== CONFIG ==================
+# ================= CONFIG =================
 ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
-FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")      # Twilio number +1...
-OWNER_PHONE = os.getenv("OWNER_PHONE", "")             # Owner real phone +1...
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")     # https://proxy-owner-ingest.onrender.com
+FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")     # +18557033886
+OWNER_PHONE = os.getenv("OWNER_PHONE", "")            # +1XXXXXXXXXX
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "")    # https://proxy-owner-ingest.onrender.com
 
 SMS_TO_CALLER = os.getenv(
     "SMS_TO_CALLER",
     "Sorry we missed your call. A technician will call you back shortly."
 )
 
-SMS_TO_OWNER_TEMPLATE = os.getenv(
-    "SMS_TO_OWNER_TEMPLATE",
+SMS_TO_OWNER = os.getenv(
+    "SMS_TO_OWNER",
     "Missed call from {caller}. Please call back."
 )
 
-# ================== HELPERS ==================
+# ================= HELPERS =================
 def twiml(xml: str) -> bytes:
     if not xml.strip().startswith("<?xml"):
         xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + xml
@@ -30,7 +30,7 @@ def twiml(xml: str) -> bytes:
 
 def send_sms(to_number: str, body: str):
     if not (ACCOUNT_SID and AUTH_TOKEN and FROM_NUMBER and to_number):
-        print("SMS SKIPPED: missing config")
+        print("SMS SKIPPED (missing config)")
         return
 
     url = f"https://api.twilio.com/2010-04-01/Accounts/{ACCOUNT_SID}/Messages.json"
@@ -38,7 +38,7 @@ def send_sms(to_number: str, body: str):
         "To": to_number,
         "From": FROM_NUMBER,
         "Body": body,
-    }).encode("utf-8")
+    }).encode()
 
     req = urllib.request.Request(url, data=data, method="POST")
     auth = base64.b64encode(f"{ACCOUNT_SID}:{AUTH_TOKEN}".encode()).decode()
@@ -46,12 +46,12 @@ def send_sms(to_number: str, body: str):
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
 
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            print("SMS SENT:", to_number, resp.getcode())
+        with urllib.request.urlopen(req, timeout=15) as r:
+            print("SMS SENT:", to_number, r.getcode())
     except Exception as e:
         print("SMS ERROR:", repr(e))
 
-# ================== SERVER ==================
+# ================= SERVER =================
 class Handler(BaseHTTPRequestHandler):
 
     def do_HEAD(self):
@@ -65,74 +65,74 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8", errors="ignore")
-        params = parse_qs(body)
+        raw = self.rfile.read(length).decode(errors="ignore")
+        params = parse_qs(raw)
 
         caller = params.get("From", [""])[0]
         path = self.path
 
-        # ---------- INCOMING CALL ----------
+        print("POST PATH:", path)
+        print("FROM:", caller)
+        print("RAW:", raw)
+
+        # -------- INCOMING CALL --------
         if path == "/" or path == "/incoming":
-            if not (OWNER_PHONE and PUBLIC_BASE_URL):
-                resp = twiml("""
-<Response>
-  <Say>We are unable to take your call right now.</Say>
-  <Hangup/>
-</Response>
-""")
-            else:
+            action_url = ""
+            if PUBLIC_BASE_URL:
                 action_url = PUBLIC_BASE_URL.rstrip("/") + "/dial-status"
-                resp = twiml(f"""
+
+            # ВСЕГДА говорим Please hold (без fallback)
+            resp = f"""
 <Response>
   <Say>Please hold.</Say>
+"""
+            if OWNER_PHONE and action_url:
+                resp += f"""
   <Dial timeout="20" action="{action_url}" method="POST">
     <Number>{OWNER_PHONE}</Number>
   </Dial>
+"""
+            resp += """
 </Response>
-""")
-                print("INCOMING CALL FROM:", caller)
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/xml")
-            self.end_headers()
-            self.wfile.write(resp)
+"""
+            self._reply_xml(resp)
             return
 
-        # ---------- DIAL RESULT ----------
+        # -------- DIAL CALLBACK --------
         if path == "/dial-status":
             dial_status = params.get("DialCallStatus", [""])[0]
             print("DIAL STATUS:", dial_status)
 
             if dial_status != "completed":
-                # Missed call → SMS
                 if caller:
                     send_sms(caller, SMS_TO_CALLER)
-
                 if OWNER_PHONE:
                     send_sms(
                         OWNER_PHONE,
-                        SMS_TO_OWNER_TEMPLATE.format(caller=caller or "unknown")
+                        SMS_TO_OWNER.format(caller=caller or "unknown")
                     )
 
-            resp = twiml("""
-<Response>
-  <Hangup/>
-</Response>
-""")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/xml")
-            self.end_headers()
-            self.wfile.write(resp)
+            self._reply_xml("<Response><Hangup/></Response>")
             return
 
-        # ---------- FALLBACK ----------
+        # -------- UNKNOWN --------
         self.send_response(404)
         self.end_headers()
-        self.wfile.write(b"Not found")
 
-# ================== RUN ==================
+    def _reply_xml(self, xml_body: str):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/xml")
+        self.end_headers()
+        self.wfile.write(twiml(xml_body))
+
+# ================= RUN =================
 def main():
     port = int(os.getenv("PORT", "10000"))
+    print("BOOT CONFIG:", {
+        "OWNER_PHONE": bool(OWNER_PHONE),
+        "PUBLIC_BASE_URL": PUBLIC_BASE_URL,
+        "FROM_NUMBER": FROM_NUMBER
+    })
     server = HTTPServer(("0.0.0.0", port), Handler)
     print("Server running on port", port)
     server.serve_forever()
