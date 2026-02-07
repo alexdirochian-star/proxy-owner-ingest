@@ -6,7 +6,7 @@ class Handler(BaseHTTPRequestHandler):
         self.rfile.read(length)
 
         self.send_response(200)
-        self.send_header("Content-type", "text/xml")
+        self.send_header("Content-Type", "text/xml")
         self.end_headers()
         self.wfile.write(b"""
 <Response>
@@ -17,3 +17,4 @@ class Handler(BaseHTTPRequestHandler):
 server = HTTPServer(("0.0.0.0", 10000), Handler)
 print("Server running...")
 server.serve_forever()
+
