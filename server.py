@@ -1,4 +1,5 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs
 
 TWIML = b"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -12,11 +13,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length)
-from urllib.parse import parse_qs
 
-params = parse_qs(body.decode())
-call_status = params.get("CallStatus", [""])[0]
-print("CALL STATUS:", call_status)
+        params = parse_qs(body.decode())
+        call_status = params.get("CallStatus", [""])[0]
+        print("CALL STATUS:", call_status)
 
         print("RECEIVED POST FROM TWILIO:")
         try:
@@ -41,3 +41,4 @@ print("CALL STATUS:", call_status)
 server = HTTPServer(("0.0.0.0", 10000), Handler)
 print("Server running...")
 server.serve_forever()
+
