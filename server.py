@@ -1,5 +1,11 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+TWIML = b"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Pause length="60"/>
+</Response>
+"""
+
 class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
@@ -15,7 +21,7 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length)
 
-        print("RECEIVED POST:")
+        print("RECEIVED POST FROM TWILIO:")
         try:
             print(body.decode())
         except:
@@ -24,9 +30,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/xml")
         self.end_headers()
-        self.wfile.write(
-            b'<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
-        )
+        self.wfile.write(TWIML)
 
 server = HTTPServer(("0.0.0.0", 10000), Handler)
 print("Server running...")
