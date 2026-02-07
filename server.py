@@ -78,20 +78,27 @@ class Handler(BaseHTTPRequestHandler):
         # -------- INCOMING CALL --------
         if path == "/" or path == "/incoming":
             action_url = ""
-            if PUBLIC_BASE_URL:
+            can_dial = bool(OWNER_PHONE and PUBLIC_BASE_URL)
+
+            if can_dial:
                 action_url = PUBLIC_BASE_URL.rstrip("/") + "/dial-status"
 
-            # ВСЕГДА говорим Please hold (без fallback)
-            resp = f"""
+            # ВСЕГДА говорим Please hold
+            resp = """
 <Response>
   <Say>Please hold.</Say>
 """
-            if OWNER_PHONE and action_url:
+
+            # Dial ТОЛЬКО если есть куда и кому
+            if can_dial:
                 resp += f"""
   <Dial timeout="20" action="{action_url}" method="POST">
     <Number>{OWNER_PHONE}</Number>
   </Dial>
 """
+            else:
+                print("DIAL SKIPPED: missing OWNER_PHONE or PUBLIC_BASE_URL")
+
             resp += """
 </Response>
 """
@@ -128,11 +135,16 @@ class Handler(BaseHTTPRequestHandler):
 # ================= RUN =================
 def main():
     port = int(os.getenv("PORT", "10000"))
+
+    # 🔴 КРИТИЧЕСКИЙ ЛОГ — ДОЛЖЕН БЫТЬ ВСЕГДА
     print("BOOT CONFIG:", {
-        "OWNER_PHONE": bool(OWNER_PHONE),
+        "ACCOUNT_SID": bool(ACCOUNT_SID),
+        "AUTH_TOKEN": bool(AUTH_TOKEN),
+        "FROM_NUMBER": FROM_NUMBER,
+        "OWNER_PHONE": OWNER_PHONE,
         "PUBLIC_BASE_URL": PUBLIC_BASE_URL,
-        "FROM_NUMBER": FROM_NUMBER
     })
+
     server = HTTPServer(("0.0.0.0", port), Handler)
     print("Server running on port", port)
     server.serve_forever()
